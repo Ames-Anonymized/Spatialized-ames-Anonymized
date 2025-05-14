@@ -652,7 +652,6 @@ ggplot(combined_stats, aes(x = Land_Cover_Type, y = Proportion, fill = Buffer)) 
   geom_bar(stat = "identity", position = "dodge") +
   scale_fill_viridis_d(name = "Buffer Distance") +
   labs(
-    title = "Land Cover Proportions by Buffer Distance",
     x = "Land Cover Type",
     y = "Proportion"
   ) +
