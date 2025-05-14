@@ -1,7 +1,7 @@
 ---
 title: "Utilizing NLCD Data Data in Brief"
 author: "Anonymous"
-date: "2025-05-08"
+date: "2025-05-14"
 output: html_document
 ---
 
@@ -9,7 +9,7 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-setwd("C:/Users/Dacat/OneDrive/NLCD data tutorial/Submit materials")
+setwd("C:/Users/Dacat/OneDrive/NLCD data tutorial/Submit materials") #Set working directory with geocoded ames file here
 ```
 
 
@@ -412,17 +412,17 @@ if (nrow(unmapped_values) > 0) {
 }
 
 # Optionally, filter out rows with NA land cover types to clean the data
-land_cover_df <- land_cover_df %>% filter(!is.na(Land_Cover_Type))
+land_cover_df_100m_example <- land_cover_df %>% filter(!is.na(Land_Cover_Type))
 
 # Summarize the cleaned and mapped data
-summary(land_cover_df)
+summary(land_cover_df_100m_example)
 
 ```
 
 Next, we join the processed land cover data back to the house dataset (ames_sf). We then visualize the results, e.g., showing proportions of land cover types for a specific house buffer.
 ```{r}
-# Pivot land_cover_df to wide format and convert Buffer_ID to integer
-land_cover_wide <- land_cover_df %>%
+# Pivot land_cover_df_100m_example to wide format and convert Buffer_ID to integer
+land_cover_wide <- land_cover_df_100m_example %>%
   select(Buffer_ID, Land_Cover_Type, Proportion) %>%  # Select relevant columns for pivoting
   pivot_wider(
     names_from = Land_Cover_Type,  # Column names will be land cover types
@@ -436,17 +436,11 @@ head(land_cover_wide)
 
 ```
 
-############### Before left join create Spatialized Ames for Later ###################
-```{r}
-ames_spatialized <- ames_sf
-```
-###################################################################################
-
 ```{r}
 # Join the wide land cover data to ames_sf using Buffer_ID
-ames_sf <- ames_sf %>%
+ames_sf_100m_example <- ames_sf %>%
   left_join(land_cover_wide, by = c("X" = "Buffer_ID"))  # Merge land cover data into spatial dataframe
-ames_sf_tib <- as_tibble(ames_sf)  # Convert the spatial dataframe into a tibble for easier inspection, this is purely for readability and not necessary
+ames_sf_tib <- as_tibble(ames_sf_100m_example)  # Convert the spatial dataframe into a tibble for easier inspection, this is purely for readability and not necessary
 
 # View the updated spatial dataframe with land cover proportions added
 head(ames_sf_tib)
@@ -525,19 +519,155 @@ ggplot() +
 
 Visually it matches our expectations, but you can also see the detail limitation of the NLCD data we're using. Our recommendation is to use higher boundary distances for broader applications.
 
+Here we add a 300M for single buffer comparison
+```{r}
+  
+# Repeat the prior process.
+houses_buffer300m_example <- st_buffer(ames_sf, dist = 300)
+houses_buffer300m_example <- st_transform(houses_buffer300m_example, crs = st_crs(nlcd_data))
+land_cover_raw <- exact_extract(nlcd_data, houses_buffer300m_example)
+
+# Convert the list of extracted values to a data frame
+land_cover_df <- land_cover_raw %>%
+  lapply(function(x) as.data.frame(table(x$value))) %>%
+  bind_rows(.id = "Buffer_ID") %>%
+  group_by(Buffer_ID) %>%
+  mutate(Proportion = Freq / sum(Freq))
+
+# No need to recreate nlcd mapping
+
+land_cover_df <- land_cover_df %>%
+  mutate(
+    Land_Cover_Type = rename_map[as.character(Var1)]
+  )
+
+# Check for any unmapped NLCD codes
+unmapped_values <- land_cover_df %>% filter(is.na(Land_Cover_Type))
+if (nrow(unmapped_values) > 0) {
+  message("Unmapped land cover types detected: ", 
+          paste(unique(unmapped_values$Var1), collapse = ", "))
+}
+
+# Again optionally, filter out rows with NA land cover types to clean the data
+land_cover_df_300m_example <- land_cover_df %>% filter(!is.na(Land_Cover_Type))
+
+# Pivot to wide format and convert Buffer_ID to integer
+land_cover_wide <- land_cover_df_300m_example %>%
+  select(Buffer_ID, Land_Cover_Type, Proportion) %>%
+  pivot_wider(
+    names_from = Land_Cover_Type,
+    values_from = Proportion,
+    values_fill = 0 
+  ) %>%
+  mutate(Buffer_ID = as.integer(Buffer_ID))
+```
+
+```{r, fig.width=12, fig.height=8}
+# Filter for the buffer and overlay it on the map
+house_1_buffer300m <- houses_buffer300m_example %>% filter(X == 1)  # Select buffer for house 1 using X == 1
+
+# Plot the buffer and NLCD data
+ggplot() +
+  geom_raster(data = nlcd_df, aes(x = Longitude, y = Latitude, fill = Land_Cover)) +
+  scale_fill_viridis_d(name = "Land Cover") +  # Use the viridis color scale for land cover types
+  geom_sf(data = house_1_buffer300m, fill = "red", alpha = 0.5) +  # Add house buffer in red with transparency
+  theme_minimal() +  # Clean theme for the map
+  labs(
+    x = "Longitude",  # X-axis label
+    y = "Latitude"  # Y-axis label
+  )
+
+# Get the bounding box of the buffer for house 1
+house_1_bbox300m <- st_bbox(house_1_buffer300m)
+
+# Add some padding to the bounding box for better visualization
+padding <- 300  # Adjust as needed for your visualization
+zoom_bbox <- house_1_bbox300m + c(-padding, -padding, padding, padding)
+
+# Plot the zoomed-in map
+ggplot() +
+  geom_raster(data = nlcd_df, aes(x = Longitude, y = Latitude, fill = Land_Cover)) +
+  scale_fill_viridis_d(name = "Land Cover") +  # Color scale for land cover types
+  geom_sf(data = house_1_buffer300m, fill = "red", alpha = 0.1) +  # Overlay buffer in red with transparency
+  theme_minimal() +  # Minimalist theme
+  labs(
+    x = "Longitude",
+    y = "Latitude"
+  ) +
+  coord_sf(
+    xlim = c(zoom_bbox["xmin"], zoom_bbox["xmax"]),  # Limit x-axis to zoomed-in bounds
+    ylim = c(zoom_bbox["ymin"], zoom_bbox["ymax"])   # Limit y-axis to zoomed-in bounds
+  )
+```
+
+Let's visualize the buffer once again
+```{r}
+# Join the wide land cover data to ames_sf using Buffer_ID
+ames_sf_300m_example <- ames_sf %>%
+  left_join(land_cover_wide, by = c("X" = "Buffer_ID"))  # Merge land cover data into spatial dataframe
+
+# Filter for the first house (X == 1)
+house_1_stats300m <- land_cover_wide %>%
+  filter(Buffer_ID == 1) %>%  # Filter to the first buffer (ID 1)
+  pivot_longer(
+    cols = -Buffer_ID,  # Select all columns except Buffer_ID for reshaping
+    names_to = "Land_Cover_Type",  # Create a column for land cover types
+    values_to = "Proportion"  # Create a column for proportions
+  )
+
+# View the stats
+house_1_stats300m
+
+# Bar plot of proportions for house 1
+ggplot(house_1_stats300m, aes(x = Land_Cover_Type, y = Proportion, fill = Land_Cover_Type)) +
+  geom_bar(stat = "identity") +  # Create a bar chart where bar heights represent proportions
+  scale_fill_viridis_d(name = "Land Cover Type", guide = "none") +  # Discrete color scale
+  labs(
+    x = "Land Cover Type",  # X-axis label
+    y = "Proportion"  # Y-axis label
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for readability
+```
+
+We now pick up on land cover types that weren't within the 100m buffer
 
 
 
 
+Let's compare the differences in the data
+```{r}
+# Add buffer labels
+house_1_stats <- house_1_stats %>%
+  mutate(Buffer = "100m")
+
+house_1_stats300m <- house_1_stats300m %>%
+  mutate(Buffer = "300m")
+
+# Combine both datasets
+combined_stats <- bind_rows(house_1_stats, house_1_stats300m)
+
+# Combined bar chart
+ggplot(combined_stats, aes(x = Land_Cover_Type, y = Proportion, fill = Buffer)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_viridis_d(name = "Buffer Distance") +
+  labs(
+    title = "Land Cover Proportions by Buffer Distance",
+    x = "Land Cover Type",
+    y = "Proportion"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
 
 
 
-From here we can conduct exploratory data analysis on our resulting land cover types; we calculate mean, standard deviation, and other statistics for each land cover type across all buffers.
+From here we can conduct exploratory data analysis on our resulting land cover types from the 100m example; we calculate mean, standard deviation, and other statistics for each land cover type across all buffers.
 
 We can then analyze spatial relationships between houses, neighborhoods, and land cover. Choose to visualize these relationships with high-quality plots and maps. Or integrate multiple data sources to derive meaningful insights about the Ames area.
 ```{r}
 # Calculate summary statistics for the entire dataset
-land_cover_summary <- land_cover_df %>%
+land_cover_summary <- land_cover_df_100m_example %>%
   group_by(Land_Cover_Type) %>%
   summarise(
     Mean_Proportion = mean(Proportion),  # Average proportion per buffer
@@ -556,7 +686,7 @@ From here we can tell that Low Intensity developed is the highest average propor
 
 ```{r}
 # Bar plot of the proportion of each land cover type across all buffers
-ggplot(land_cover_df, aes(x = Land_Cover_Type, y = Proportion, fill = Land_Cover_Type)) +
+ggplot(land_cover_df_100m_example, aes(x = Land_Cover_Type, y = Proportion, fill = Land_Cover_Type)) +
   geom_bar(stat = "summary", fun = "mean", show.legend = FALSE) +
   theme_minimal() +
   coord_flip() +  # Flip axis for better readability
@@ -571,7 +701,7 @@ ggplot(land_cover_df, aes(x = Land_Cover_Type, y = Proportion, fill = Land_Cover
 
 ```{r}
 # Plot a boxplot of proportions by land cover type
-ggplot(land_cover_df, aes(x = Land_Cover_Type, y = Proportion, fill = Land_Cover_Type)) +
+ggplot(land_cover_df_100m_example, aes(x = Land_Cover_Type, y = Proportion, fill = Land_Cover_Type)) +
   geom_boxplot() +
   labs(
        x = "Land Cover Type",
@@ -587,7 +717,7 @@ ggplot(land_cover_df, aes(x = Land_Cover_Type, y = Proportion, fill = Land_Cover
 
 ```{r}
 # Frequency plot for a specific land cover type (e.g., "Developed, High Intensity")
-ggplot(land_cover_df %>% filter(Land_Cover_Type == "Developed, High Intensity"), 
+ggplot(land_cover_df_100m_example %>% filter(Land_Cover_Type == "Developed, High Intensity"), 
        aes(x = Proportion)) +
   geom_histogram(fill = "steelblue", alpha = 0.6) +
   theme_minimal() +
@@ -601,7 +731,7 @@ ggplot(land_cover_df %>% filter(Land_Cover_Type == "Developed, High Intensity"),
 
 
 
-Section 2. This section builds upon section one to create the Dataset with varied buffer lengths and Separate NLCD coverage years. Unfortunately the R package only has access to the legacy version and annual (Released on late October of 2024) is unavailable. The legacy version does have the 2006 2008 and 2011. Where we will apply 2006 -> 2006 & 2007, 2008 -> 2008 & 2009, and 2011 -> to 2010. Barriers are still from 2011 due to the tigris package being updated with the 2010 census, due to the amount of coverage possible barrier mismatch is not an issue.
+Section 2. This section builds upon section 1 to create the Dataset with varied buffer lengths and Separate NLCD coverage years. Unfortunately the R package only has access to the legacy version and annual (Released on late October of 2024) is unavailable. The legacy version does have the 2006 2008 and 2011. Where we will apply 2006 -> 2006 & 2007, 2008 -> 2008 & 2009, and 2011 -> to 2010. Barriers are still from 2011 due to the tigris package being updated with the 2010 census, due to the amount of coverage possible barrier mismatch is not an issue.
 
 ###############Creating Spatial Dataset #####################
 
@@ -904,7 +1034,7 @@ Store300mwide <- rbind(Store300mwide, land_cover_wide300)
 ```{r}
 
 # Join the wide land cover data using Buffer_ID
-ames_spatialized_300m <- ames_spatialized %>%
+ames_spatialized_300m <- ames_sf %>%
   left_join(Store300mwide, by = c("X" = "Buffer_ID"))  # Merge land cover data into spatial dataframe
 ames_spatialized_300m_tib <- as_tibble(ames_spatialized_300m)  # Convert the spatial dataframe into a tibble for easier inspection, this is purely for readability and not necessary
 
@@ -1083,7 +1213,7 @@ Store600mwide <- rbind(Store600mwide, land_cover_wide600)
 ```{r}
 
 # Join the wide land cover data using Buffer_ID
-ames_spatialized_600m <- ames_spatialized %>%
+ames_spatialized_600m <- ames_sf %>%
   left_join(Store600mwide, by = c("X" = "Buffer_ID"))  # Merge land cover data into spatial dataframe
 ames_spatialized_600m_tib <- as_tibble(ames_spatialized_600m)  # Convert the spatial dataframe into a tibble for easier inspection, this is purely for readability and not necessary
 
@@ -1251,7 +1381,7 @@ Store1000mwide <- rbind(Store1000mwide, land_cover_wide1000)
 ```{r}
 
 # Join the wide land cover data using Buffer_ID
-ames_spatialized_1000m <- ames_spatialized %>%
+ames_spatialized_1000m <- ames_sf %>%
   left_join(Store1000mwide, by = c("X" = "Buffer_ID"))  # Merge land cover data into spatial dataframe
 ames_spatialized_1000m_tib <- as_tibble(ames_spatialized_1000m)  # Convert the spatial dataframe into a tibble for easier inspection, this is purely for readability and not necessary
 
